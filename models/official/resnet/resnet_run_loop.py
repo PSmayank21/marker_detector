@@ -30,10 +30,7 @@ import tensorflow as tf  # pylint: disable=g-bad-import-order
 
 from official.resnet import resnet_model
 from official.utils.arg_parsers import parsers
-from official.utils.export import export
-from official.utils.logs import hooks_helper
-from official.utils.logs import logger
-from official.utils.misc import model_helpers
+from official.utils.logging import hooks_helper
 
 
 ################################################################################
@@ -171,9 +168,7 @@ def learning_rate_with_decay(
 
 def resnet_model_fn(features, labels, mode, model_class,
                     resnet_size, weight_decay, learning_rate_fn, momentum,
-                    data_format, version, loss_scale,
-                    loss_filter_fn=None, multi_gpu=False,
-                    dtype=resnet_model.DEFAULT_DTYPE):
+                    data_format, version, loss_filter_fn=None, multi_gpu=False):
   """Shared functionality for different resnet model_fns.
 
   Initializes the ResnetModel representing the model layers
@@ -199,15 +194,12 @@ def resnet_model_fn(features, labels, mode, model_class,
       If set to None, the format is dependent on whether a GPU is available.
     version: Integer representing which version of the ResNet network to use.
       See README for details. Valid values: [1, 2]
-    loss_scale: The factor to scale the loss for numerical stability. A detailed
-      summary is present in the arg parser help text.
     loss_filter_fn: function that takes a string variable name and returns
       True if the var should be included in loss calculation, and False
       otherwise. If None, batch_normalization variables will be excluded
       from the loss.
     multi_gpu: If True, wrap the optimizer in a TowerOptimizer suitable for
       data-parallel distribution across multiple GPUs.
-    dtype: the TensorFlow dtype to use for calculations.
 
   Returns:
     EstimatorSpec parameterized according to the input params and the
@@ -217,16 +209,8 @@ def resnet_model_fn(features, labels, mode, model_class,
   # Generate a summary node for the images
   tf.summary.image('images', features, max_outputs=6)
 
-  features = tf.cast(features, dtype)
-
-  model = model_class(resnet_size, data_format, version=version, dtype=dtype)
-
+  model = model_class(resnet_size, data_format, version=version)
   logits = model(features, mode == tf.estimator.ModeKeys.TRAIN)
-
-  # This acts as a no-op if the logits are already in fp32 (provided logits are
-  # not a SparseTensor). If dtype is is low precision, logits must be cast to
-  # fp32 for numerical stability.
-  logits = tf.cast(logits, tf.float32)
 
   predictions = {
       'classes': tf.argmax(logits, axis=1),
@@ -234,13 +218,7 @@ def resnet_model_fn(features, labels, mode, model_class,
   }
 
   if mode == tf.estimator.ModeKeys.PREDICT:
-    # Return the predictions and the specification for serving a SavedModel
-    return tf.estimator.EstimatorSpec(
-        mode=mode,
-        predictions=predictions,
-        export_outputs={
-            'predict': tf.estimator.export.PredictOutput(predictions)
-        })
+    return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
   # Calculate loss, which includes softmax cross entropy and L2 regularization.
   cross_entropy = tf.losses.softmax_cross_entropy(
@@ -258,8 +236,7 @@ def resnet_model_fn(features, labels, mode, model_class,
 
   # Add weight decay to the loss.
   l2_loss = weight_decay * tf.add_n(
-      # loss is computed using fp32 for numerical stability.
-      [tf.nn.l2_loss(tf.cast(v, tf.float32)) for v in tf.trainable_variables()
+      [tf.nn.l2_loss(v) for v in tf.trainable_variables()
        if loss_filter_fn(v.name)])
   tf.summary.scalar('l2_loss', l2_loss)
   loss = cross_entropy + l2_loss
@@ -281,22 +258,8 @@ def resnet_model_fn(features, labels, mode, model_class,
     if multi_gpu:
       optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
 
-    if loss_scale != 1:
-      # When computing fp16 gradients, often intermediate tensor values are
-      # so small, they underflow to 0. To avoid this, we multiply the loss by
-      # loss_scale to make these tensor values loss_scale times bigger.
-      scaled_grad_vars = optimizer.compute_gradients(loss * loss_scale)
-
-      # Once the gradient computation is complete we can scale the gradients
-      # back to the correct scale before passing them to the optimizer.
-      unscaled_grad_vars = [(grad / loss_scale, var)
-                            for grad, var in scaled_grad_vars]
-      minimize_op = optimizer.apply_gradients(unscaled_grad_vars, global_step)
-    else:
-      minimize_op = optimizer.minimize(loss, global_step)
-
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    train_op = tf.group(minimize_op, update_ops)
+    train_op = tf.group(optimizer.minimize(loss, global_step), update_ops)
   else:
     train_op = None
 
@@ -346,20 +309,8 @@ def validate_batch_size_for_multi_gpu(batch_size):
     raise ValueError(err)
 
 
-def resnet_main(flags, model_function, input_function, shape=None):
-  """Shared main loop for ResNet Models.
-
-  Args:
-    flags: FLAGS object that contains the params for running. See
-      ResnetArgParser for created flags.
-    model_function: the function that instantiates the Model and builds the
-      ops for train/eval. This will be passed directly into the estimator.
-    input_function: the function that processes the dataset and returns a
-      dataset that the estimator can train on. This will be wrapped with
-      all the relevant flags for running and passed to estimator.
-    shape: list of ints representing the shape of the images used for training.
-      This is only used if flags.export_dir is passed.
-  """
+def resnet_main(flags, model_function, input_function):
+  """Shared main loop for ResNet Models."""
 
   # Using the Winograd non-fused algorithms provides a small performance boost.
   os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
@@ -394,18 +345,11 @@ def resnet_main(flags, model_function, input_function, shape=None):
           'batch_size': flags.batch_size,
           'multi_gpu': flags.multi_gpu,
           'version': flags.version,
-          'loss_scale': flags.loss_scale,
-          'dtype': flags.dtype
       })
-
-  benchmark_logger = logger.config_benchmark_logger(flags.benchmark_log_dir)
-  benchmark_logger.log_run_info('resnet')
 
   for _ in range(flags.train_epochs // flags.epochs_between_evals):
     train_hooks = hooks_helper.get_train_hooks(
-        flags.hooks,
-        batch_size=flags.batch_size,
-        benchmark_log_dir=flags.benchmark_log_dir)
+        flags.hooks, batch_size=flags.batch_size)
 
     print('Starting a training cycle.')
 
@@ -431,42 +375,18 @@ def resnet_main(flags, model_function, input_function, shape=None):
     # global_step count.
     eval_results = classifier.evaluate(input_fn=input_fn_eval,
                                        steps=flags.max_train_steps)
-
-    benchmark_logger.log_evaluation_result(eval_results)
-
-    if model_helpers.past_stop_threshold(
-        flags.stop_threshold, eval_results['accuracy']):
-      break
-
-  if flags.export_dir is not None:
-    warn_on_multi_gpu_export(flags.multi_gpu)
-
-    # Exports a saved model for the given classifier.
-    input_receiver_fn = export.build_tensor_serving_input_receiver_fn(
-        shape, batch_size=flags.batch_size)
-    classifier.export_savedmodel(flags.export_dir, input_receiver_fn)
-
-
-def warn_on_multi_gpu_export(multi_gpu=False):
-  """For the time being, multi-GPU mode does not play nicely with exporting."""
-  if multi_gpu:
-    tf.logging.warning(
-        'You are exporting a SavedModel while in multi-GPU mode. Note that '
-        'the resulting SavedModel will require the same GPUs be available.'
-        'If you wish to serve the SavedModel from a different device, '
-        'try exporting the SavedModel with multi-GPU mode turned off.')
+    print(eval_results)
 
 
 class ResnetArgParser(argparse.ArgumentParser):
-  """Arguments for configuring and running a Resnet Model."""
+  """Arguments for configuring and running a Resnet Model.
+  """
 
   def __init__(self, resnet_size_choices=None):
     super(ResnetArgParser, self).__init__(parents=[
         parsers.BaseParser(),
         parsers.PerformanceParser(),
         parsers.ImageModelParser(),
-        parsers.ExportParser(),
-        parsers.BenchmarkParser(),
     ])
 
     self.add_argument(
@@ -481,12 +401,3 @@ class ResnetArgParser(argparse.ArgumentParser):
         help='[default: %(default)s] The size of the ResNet model to use.',
         metavar='<RS>' if resnet_size_choices is None else None
     )
-
-  def parse_args(self, args=None, namespace=None):
-    args = super(ResnetArgParser, self).parse_args(
-        args=args, namespace=namespace)
-
-    # handle coupling between dtype and loss_scale
-    parsers.parse_dtype_info(args)
-
-    return args

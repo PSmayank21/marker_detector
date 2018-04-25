@@ -17,7 +17,6 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.framework import errors
-from tensorflow.python.framework import ops
 
 from object_detection.core import box_list
 from object_detection.core import box_list_ops
@@ -510,13 +509,9 @@ class BoxListOpsTest(tf.test.TestCase):
       with self.assertRaises(ValueError):
         box_list_ops.sort_by_field(boxes, 'misc')
 
-      if ops._USE_C_API:
-        with self.assertRaises(ValueError):
-          box_list_ops.sort_by_field(boxes, 'weights')
-      else:
-        with self.assertRaisesWithPredicateMatch(errors.InvalidArgumentError,
-                                                 'Incorrect field size'):
-          sess.run(box_list_ops.sort_by_field(boxes, 'weights').get())
+      with self.assertRaisesWithPredicateMatch(errors.InvalidArgumentError,
+                                               'Incorrect field size'):
+        sess.run(box_list_ops.sort_by_field(boxes, 'weights').get())
 
   def test_visualize_boxes_in_image(self):
     image = tf.zeros((6, 4, 3))

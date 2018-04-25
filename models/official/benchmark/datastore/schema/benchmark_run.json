@@ -15,7 +15,7 @@
     "description": "The date when the test of the model is started",
     "mode": "REQUIRED",
     "name": "run_date",
-    "type": "TIMESTAMP"
+    "type": "DATETIME"
   },
   {
     "description": "The tensorflow version information.",
@@ -58,7 +58,7 @@
     "type": "RECORD"
   },
   {
-    "description": "Environment variables when the benchmark run is executed.",
+    "description": "Enviornment variables when the benchmark run is executed.",
     "fields": [
       {
         "description": "The name of the variable.",
@@ -74,27 +74,7 @@
       }
     ],
     "mode": "REPEATED",
-    "name": "environment_variable",
-    "type": "RECORD"
-  },
-  {
-    "description": "TF Environment variables when the benchmark run is executed.",
-    "fields": [
-      {
-        "description": "The name of the variable.",
-        "mode": "REQUIRED",
-        "name": "name",
-        "type": "STRING"
-      },
-      {
-        "description": "The value of the variable.",
-        "mode": "NULLABLE",
-        "name": "value",
-        "type": "STRING"
-      }
-    ],
-    "mode": "REPEATED",
-    "name": "tensorflow_environment_variables",
+    "name": "enviornment_variable",
     "type": "RECORD"
   },
   {

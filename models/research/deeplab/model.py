@@ -64,26 +64,19 @@ _CONCAT_PROJECTION_SCOPE = 'concat_projection'
 _DECODER_SCOPE = 'decoder'
 
 
-def get_extra_layer_scopes(last_layers_contain_logits_only=False):
+def get_extra_layer_scopes():
   """Gets the scopes for extra layers.
-
-  Args:
-    last_layers_contain_logits_only: Boolean, True if only consider logits as
-    the last layer (i.e., exclude ASPP module, decoder module and so on)
 
   Returns:
     A list of scopes for extra layers.
   """
-  if last_layers_contain_logits_only:
-    return [_LOGITS_SCOPE_NAME]
-  else:
-    return [
-        _LOGITS_SCOPE_NAME,
-        _IMAGE_POOLING_SCOPE,
-        _ASPP_SCOPE,
-        _CONCAT_PROJECTION_SCOPE,
-        _DECODER_SCOPE,
-    ]
+  return [
+      _LOGITS_SCOPE_NAME,
+      _IMAGE_POOLING_SCOPE,
+      _ASPP_SCOPE,
+      _CONCAT_PROJECTION_SCOPE,
+      _DECODER_SCOPE,
+  ]
 
 
 def predict_labels_multi_scale(images,
